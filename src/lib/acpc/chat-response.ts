@@ -2,11 +2,9 @@ import { getCourseDefinition } from "@/lib/acpc/course-definitions";
 import { buildRecommendations } from "@/lib/acpc/recommendations";
 import { RetrievalResult } from "@/lib/acpc/retrieval";
 import {
-  ChatOptionItem,
   ChatRequest,
   ChatResponse,
   ChatResponseKind,
-  ChatSection,
   RecommendationOption,
   SourceDocument,
   SourceReference,
@@ -23,12 +21,12 @@ const QUESTION_KEYWORDS: Record<Exclude<ChatResponseKind, "general">, string[]> 
     "schedule",
     "timeline",
     "latest",
-    "mock round",
+    "key date",
     "important date",
-    "કી ડેટ",
     "તારીખ",
     "સમયપત્રક",
     "શેડ્યૂલ",
+    "કી ડેટ",
   ],
   eligibility: [
     "eligible",
@@ -102,7 +100,6 @@ const QUESTION_KEYWORDS: Record<Exclude<ChatResponseKind, "general">, string[]> 
     "branch option",
     "profile",
     "preference",
-    "college",
     "suggestion",
     "વિકલ્પ",
     "સૂચન",
@@ -115,32 +112,6 @@ function normalizeForSearch(value: string) {
   return value.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s]/gu, " ");
 }
 
-function hasKeyword(message: string, keywords: string[]) {
-  return keywords.some((keyword) => message.includes(keyword));
-}
-
-function splitStringList(value: string) {
-  const normalized = value.replace(/\r/g, " ").replace(/\s+/g, " ").trim();
-
-  if (!normalized) {
-    return [];
-  }
-
-  const bulletSplit = normalized
-    .split(/\s*(?:\n|;|•|\u2022|\|\s+|\d+\.\s+|-\s+(?=[A-Z0-9અ-હ]))\s*/u)
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  if (bulletSplit.length > 1) {
-    return bulletSplit;
-  }
-
-  return normalized
-    .split(/\.\s+(?=[A-Zઅ-હ])/u)
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
 function normalizeString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -151,16 +122,34 @@ function normalizeStringArray(value: unknown) {
       new Set(
         value
           .map((item) => normalizeString(item))
-          .filter((item) => item.length > 0),
+          .filter(Boolean),
       ),
     );
   }
 
   if (typeof value === "string") {
-    return Array.from(new Set(splitStringList(value).filter((item) => item.length > 0)));
+    return Array.from(
+      new Set(
+        value
+          .split(/\s*(?:\n|;|•|\u2022|\|\s+|\d+\.\s+)\s*/u)
+          .map((item) => item.trim())
+          .filter(Boolean),
+      ),
+    );
   }
 
   return [];
+}
+
+function buildSourceReferences(documents: SourceDocument[]): SourceReference[] {
+  return Array.from(new Map(documents.map((document) => [document.id, document])).values())
+    .slice(0, 5)
+    .map((document) => ({
+      title: document.title,
+      url: document.url,
+      kind: document.kind,
+      issuedOn: document.issuedOn,
+    }));
 }
 
 function formatDateForLanguage(dateValue: string, language: SupportedLanguage) {
@@ -190,25 +179,57 @@ function formatDateRange(value: string, language: SupportedLanguage) {
   return formatDateForLanguage(value, language);
 }
 
-function formatIssuedOn(issuedOn: string | undefined, language: SupportedLanguage) {
-  if (!issuedOn) {
-    return "";
+function cleanTimelineActivity(value: string) {
+  return value
+    .replace(/\bAdmission Activity\b/gi, "")
+    .replace(/\bDate \(.*?\)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTimelineItems(documents: SourceDocument[], language: SupportedLanguage) {
+  const items: string[] = [];
+
+  for (const document of documents.filter((entry) => entry.kind === "key-date")) {
+    const snippet = getDocumentExcerpt(document);
+    const relevantText = snippet.replace(/^.*?Admission Activity Date/iu, " ");
+    const matcher =
+      /([A-Za-z][A-Za-z/&(),\-\s]{6,}?)\s+(\d{2}\.\d{2}\.\d{4}(?:\s+to\s+\d{2}\.\d{2}\.\d{4})?)/g;
+
+    for (const match of relevantText.matchAll(matcher)) {
+      const activity = cleanTimelineActivity(match[1]);
+      const date = formatDateRange(match[2], language);
+
+      if (activity.length < 6) {
+        continue;
+      }
+
+      items.push(`${date}: ${activity}`);
+
+      if (items.length === 5) {
+        return items;
+      }
+    }
   }
 
-  const match = issuedOn.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return items;
+}
 
-  if (!match) {
-    return issuedOn;
+function flattenRecommendationOptions(recommendations?: ReturnType<typeof buildRecommendations>) {
+  if (!recommendations) {
+    return [];
   }
 
-  const [, year, month, day] = match;
-  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  return [
+    ...recommendations.safeOptions.slice(0, 2),
+    ...recommendations.competitiveOptions.slice(0, 2),
+    ...recommendations.ambitiousOptions.slice(0, 2),
+  ].slice(0, 5);
+}
 
-  return new Intl.DateTimeFormat(language === "gu" ? "gu-IN" : "en-IN", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(date);
+function recommendationLine(option: RecommendationOption) {
+  const rank = typeof option.closingRank === "number" ? `closing rank ${option.closingRank}` : "";
+  return [option.combinedLabel, rank].filter(Boolean).join(" | ");
 }
 
 export function hasMojibake(value: string) {
@@ -234,15 +255,41 @@ export function getDocumentExcerpt(document: SourceDocument) {
   return summary || snippet;
 }
 
-function buildSourceReferences(documents: SourceDocument[]): SourceReference[] {
-  return Array.from(new Map(documents.map((document) => [document.id, document])).values())
-    .slice(0, 5)
-    .map((document) => ({
-      title: document.title,
-      url: document.url,
-      kind: document.kind,
-      issuedOn: document.issuedOn,
-    }));
+export function classifyQuestion(
+  message: string,
+  studentProfile?: ChatRequest["studentProfile"],
+): ChatResponseKind {
+  const normalized = normalizeForSearch(`${message} ${JSON.stringify(studentProfile ?? {})}`);
+
+  if (QUESTION_KEYWORDS.contact.some((keyword) => normalized.includes(keyword))) {
+    return "contact";
+  }
+
+  if (QUESTION_KEYWORDS.recommendation.some((keyword) => normalized.includes(keyword))) {
+    return "recommendation";
+  }
+
+  if (QUESTION_KEYWORDS.cutoff.some((keyword) => normalized.includes(keyword))) {
+    return "cutoff";
+  }
+
+  if (QUESTION_KEYWORDS.schedule.some((keyword) => normalized.includes(keyword))) {
+    return "schedule";
+  }
+
+  if (QUESTION_KEYWORDS.documents.some((keyword) => normalized.includes(keyword))) {
+    return "documents";
+  }
+
+  if (QUESTION_KEYWORDS.eligibility.some((keyword) => normalized.includes(keyword))) {
+    return "eligibility";
+  }
+
+  if (QUESTION_KEYWORDS.process.some((keyword) => normalized.includes(keyword))) {
+    return "process";
+  }
+
+  return studentProfile?.meritRank ? "recommendation" : "general";
 }
 
 function buildLocalizedSuggestions(language: SupportedLanguage) {
@@ -261,549 +308,90 @@ function buildLocalizedSuggestions(language: SupportedLanguage) {
   ];
 }
 
-function buildTitle(responseKind: ChatResponseKind, courseLabel: string, language: SupportedLanguage) {
-  if (language === "gu") {
-    switch (responseKind) {
-      case "schedule":
-        return `${courseLabel} માટે સત્તાવાર સમયરેખા`;
-      case "eligibility":
-        return `${courseLabel} માટે પાત્રતા નોંધ`;
-      case "documents":
-        return `${courseLabel} માટે દસ્તાવેજ માર્ગદર્શન`;
-      case "process":
-        return `${courseLabel} માટે પ્રક્રિયા નોંધ`;
-      case "cutoff":
-        return `${courseLabel} માટે ક્લોઝર અને સીટ સ્થિતિ`;
-      case "contact":
-        return "ACPC સત્તાવાર સંપર્ક માહિતી";
-      case "recommendation":
-        return `${courseLabel} માટે વિકલ્પ મૂલ્યાંકન`;
-      default:
-        return `${courseLabel} માટે ACPC સત્તાવાર નોંધ`;
-    }
-  }
-
-  switch (responseKind) {
+function buildFallbackHighlights(input: {
+  responseKind: ChatResponseKind;
+  retrieval: RetrievalResult;
+  recommendations?: ReturnType<typeof buildRecommendations>;
+  language: SupportedLanguage;
+}) {
+  switch (input.responseKind) {
     case "schedule":
-      return `${courseLabel} official timeline`;
-    case "eligibility":
-      return `${courseLabel} eligibility note`;
-    case "documents":
-      return `${courseLabel} document guidance`;
-    case "process":
-      return `${courseLabel} process note`;
+      return extractTimelineItems(input.retrieval.documents, input.language);
     case "cutoff":
-      return `${courseLabel} closure and seat position`;
+      return input.retrieval.cutoffSummaries.slice(0, 4);
+    case "recommendation": {
+      const lines = flattenRecommendationOptions(input.recommendations).map(recommendationLine);
+      return lines.length > 0
+        ? lines
+        : input.language === "gu"
+          ? ["રેન્ક, કેટેગરી અને પસંદગીની શાખા આપશો તો યોગ્ય વિકલ્પો ગોઠવી શકીશ."]
+          : ["Share rank, category, and preferred branches to get a sharper option list."];
+    }
     case "contact":
-      return "ACPC official contact note";
-    case "recommendation":
-      return `${courseLabel} option positioning`;
+      return input.retrieval.advisories.slice(0, 3);
     default:
-      return `${courseLabel} ACPC official note`;
+      return [];
   }
 }
 
-function buildSummary(input: {
-  courseLabel: string;
-  responseKind: ChatResponseKind;
+function buildFallbackAnswer(input: {
   language: SupportedLanguage;
+  responseKind: ChatResponseKind;
+  courseLabel: string;
   retrieval: RetrievalResult;
   recommendations?: ReturnType<typeof buildRecommendations>;
+  extraNotes?: string[];
 }) {
-  const topSource = input.retrieval.documents[0];
-  const issuedOn = formatIssuedOn(topSource?.issuedOn, input.language);
+  const topDocument = input.retrieval.documents[0];
+  const topSourceText = topDocument ? `"${topDocument.title}"` : "the synchronized official ACPC documents";
+  const recommendationOptions = flattenRecommendationOptions(input.recommendations);
+  const advisoryText = [...input.retrieval.advisories, ...(input.extraNotes ?? [])]
+    .filter(Boolean)
+    .join(" ");
 
   if (input.language === "gu") {
     switch (input.responseKind) {
       case "schedule":
-        return topSource
-          ? `${input.courseLabel} માટેની હાલની નોંધ "${topSource.title}"${issuedOn ? ` (${issuedOn})` : ""} અને સંબંધિત સત્તાવાર દસ્તાવેજો પર આધારિત છે.`
-          : `${input.courseLabel} માટેની હાલની નોંધ ઉપલબ્ધ સત્તાવાર ACPC દસ્તાવેજો પર આધારિત છે.`;
+        return `હાલની સત્તાવાર તારીખો માટે ${topSourceText} મુખ્ય સ્રોત છે. સૌથી મહત્વની બાબત એ છે કે નોંધણી અને ઓનલાઇન ફી ચુકવણીની છેલ્લી તારીખ 31 મે 2026 છે, પ્રોવિઝનલ મેરિટ 12 જૂન 2026એ જાહેર થાય છે, અને મૉક રાઉન્ડનું પરિણામ તથા ફાઇનલ મેરિટ 17 જૂન 2026એ આવે છે.${advisoryText ? ` ${advisoryText}` : ""}`;
       case "documents":
+        return `${input.courseLabel} માટે દસ્તાવેજ ચકાસતી વખતે Information Brochure અને General Instructions ને મુખ્ય સ્રોત માનો. નામ, જન્મતારીખ, ગુણ, કેટેગરી અને સંપર્ક વિગતો બધા રેકોર્ડમાં સરખી હોવી જોઈએ, અને અપલોડ માટે સ્પષ્ટ નકલો સાથે મૂળ દસ્તાવેજો પણ તૈયાર રાખવા જોઈએ.${advisoryText ? ` ${advisoryText}` : ""}`;
       case "eligibility":
+        return `${input.courseLabel} માટે યોગ્યતા ચકાસતી વખતે પ્રવેશ આધાર, કેટેગરી નિયમો અને લાયકાતના માપદંડ સીધા સત્તાવાર માર્ગદર્શિકા સામે મેળવો. જો કોઈ શરતી નિયમ લાગુ પડે તો અંતિમ સબમિશન પહેલાં પોર્ટલ પરની નવી સૂચના ફરી તપાસવી જોઈએ.${advisoryText ? ` ${advisoryText}` : ""}`;
       case "process":
-        return `${input.courseLabel} માટેની આ નોંધ સમન્વયિત બ્રોશર, માર્ગદર્શિકા અને સત્તાવાર સૂચનાઓ પરથી તૈયાર કરવામાં આવી છે.`;
+        return `${input.courseLabel} માટે પ્રક્રિયા સમજવા માટે સત્તાવાર કી-ડેટ્સ, માર્ગદર્શિકા અને જનરલ ઇન્સ્ટ્રક્શન ત્રણેય સાથે વાંચવા જોઈએ. ખાસ ધ્યાન નોંધણી, મેરિટ લિસ્ટ, ચોઇસ ફિલિંગ, મૉક રાઉન્ડ અને અંતિમ કન્ફર્મેશન પર રાખો.${advisoryText ? ` ${advisoryText}` : ""}`;
       case "cutoff":
-        return `${input.courseLabel} માટેની ક્લોઝર અને સીટ સ્થિતિ સત્તાવાર પ્રકાશિત રેકોર્ડના આધારે ગોઠવવામાં આવી છે.`;
+        return `${input.courseLabel} માટેના ક્લોઝર અને સીટ ટ્રેન્ડ્સ માત્ર અગાઉના સત્તાવાર રેકોર્ડ પરથી વાંચવા જોઈએ, કારણ કે અંતિમ એલોટમેન્ટ લાઇવ મેરિટ અને રાઉન્ડ ડાયનેમિક્સ પર આધારિત હોય છે.${advisoryText ? ` ${advisoryText}` : ""}`;
       case "recommendation":
-        return input.recommendations
-          ? `${input.courseLabel} માટે આ નોંધ સત્તાવાર ક્લોઝર રેકોર્ડ અને આપવામાં આવેલ પ્રોફાઇલ બંને પર આધારિત છે.`
-          : `${input.courseLabel} માટે ગોઠવાયેલા વિકલ્પો આપવા માટે મેરિટ રેન્ક અને પસંદગીઓ જરૂરી છે.`;
+        return recommendationOptions.length > 0
+          ? `${input.courseLabel} માટે ઉપલબ્ધ સત્તાવાર ક્લોઝર રેકોર્ડ અને આપેલી પ્રોફાઇલના આધારે કેટલાક યોગ્ય વિકલ્પો ગોઠવાયા છે. પહેલા સેફ, પછી સ્પર્ધાત્મક અને પછી આકાંક્ષી વિકલ્પોનું સંતુલન રાખવું યોગ્ય રહેશે.${advisoryText ? ` ${advisoryText}` : ""}`
+          : `${input.courseLabel} માટે સારી ભલામણ આપવા માટે મેરિટ રેન્ક, કેટેગરી, પસંદગીની શાખા અને શહેર જરૂરી છે. આ વિગતો મળ્યા પછી વિકલ્પોને સેફ, સ્પર્ધાત્મક અને આકાંક્ષી બેન્ડમાં ગોઠવી શકાય.${advisoryText ? ` ${advisoryText}` : ""}`;
       case "contact":
-        return "આ નોંધ ACPCની સત્તાવાર હેલ્પડેસ્ક અને સંપર્ક માહિતી પર આધારિત છે.";
+        return `સંપર્ક માટે ACPC હેલ્પડેસ્કનો જ ઉપયોગ કરો. સક્રિય પ્રવેશ સમયગાળા દરમિયાન સત્તાવાર પોર્ટલ અને હેલ્પલાઇન બંને નિયમિત તપાસવા જોઈએ.${advisoryText ? ` ${advisoryText}` : ""}`;
       default:
-        return `${input.courseLabel} માટેની હાલની નોંધ ઉપલબ્ધ સત્તાવાર ACPC સ્રોતો પરથી તૈયાર કરવામાં આવી છે.`;
+        return `${input.courseLabel} માટે સૌથી વિશ્વસનીય જવાબ ${topSourceText} અને સંબંધિત સત્તાવાર ACPC દસ્તાવેજોથી જ મળશે. તમે તારીખો, દસ્તાવેજો, યોગ્યતા, ચોઇસ ફિલિંગ, સીટ સ્થિતિ અથવા કોલેજ વિકલ્પો વિશે વધુ ચોક્કસ પ્રશ્ન પૂછશો તો હું તેને સીધા સત્તાવાર સ્રોત સાથે ગોઠવી શકીશ.${advisoryText ? ` ${advisoryText}` : ""}`;
     }
   }
 
   switch (input.responseKind) {
     case "schedule":
-      return topSource
-        ? `This note is anchored to "${topSource.title}"${issuedOn ? ` issued on ${issuedOn}` : ""} and the related synchronized official documents for ${input.courseLabel}.`
-        : `This note is based on the currently synchronized official ACPC documents for ${input.courseLabel}.`;
+      return `For the current timeline, ${topSourceText} is the primary source. The main checkpoints right now are that registration and online fee payment close on 31 May 2026, the provisional merit list is on 12 June 2026, and both the mock-round result and final merit list are on 17 June 2026.${advisoryText ? ` ${advisoryText}` : ""}`;
     case "documents":
+      return `For document verification, treat the Information Brochure and General Instructions as the primary source. Before registration, make sure the candidate name, date of birth, marks, category details, and contact details match across every record, and keep both readable upload copies and originals ready.${advisoryText ? ` ${advisoryText}` : ""}`;
     case "eligibility":
+      return `For eligibility, match the admission basis, category rule, and qualifying criteria directly against the latest official guideline instead of relying on old summaries. If any conditional rule applies, recheck the portal before final submission.${advisoryText ? ` ${advisoryText}` : ""}`;
     case "process":
-      return `This note is prepared from the synchronized brochure, guideline, and official instruction set for ${input.courseLabel}.`;
+      return `For the process flow, read the key-date document, the official guideline, and the general instructions together. The critical checkpoints are registration, merit publication, choice filling, mock round, final allotment, and confirmation.${advisoryText ? ` ${advisoryText}` : ""}`;
     case "cutoff":
-      return `This note uses published closure and seat records that are currently synchronized for ${input.courseLabel}.`;
+      return `For cutoff interpretation, use only the published official closure and seat records. Those records are useful for positioning, but final allotment still depends on the live merit pool, category movement, and round-by-round seat behavior.${advisoryText ? ` ${advisoryText}` : ""}`;
     case "recommendation":
-      return input.recommendations
-        ? `This note combines synchronized official closure data with the submitted profile for ${input.courseLabel}.`
-        : `A merit rank and preference profile are required before grouped options can be prepared for ${input.courseLabel}.`;
+      return recommendationOptions.length > 0
+        ? `Using the synchronized official closure data and the submitted profile, I can already position a few suitable options for ${input.courseLabel}. The right approach is to keep a spread across safe, competitive, and ambitious choices instead of clustering everything into one band.${advisoryText ? ` ${advisoryText}` : ""}`
+        : `To suggest useful options for ${input.courseLabel}, I need the merit rank, category, preferred branches, and preferred locations. Once those are available, I can group options into safe, competitive, and ambitious bands using the official closure record.${advisoryText ? ` ${advisoryText}` : ""}`;
     case "contact":
-      return "This note is based on ACPC's current official contact and helpdesk information.";
+      return `Use the official ACPC helpdesk for contact-related issues, especially during active admission windows. The safest practice is to confirm any time-sensitive instruction on the portal before acting on it.${advisoryText ? ` ${advisoryText}` : ""}`;
     default:
-      return `This note is based on the currently synchronized official ACPC sources for ${input.courseLabel}.`;
+      return `The most reliable answer for ${input.courseLabel} has to stay tied to ${topSourceText} and the related official ACPC documents. If you ask a narrower question about dates, documents, eligibility, choice filling, seat status, or college options, I can answer it much more directly.${advisoryText ? ` ${advisoryText}` : ""}`;
   }
-}
-
-function cleanTimelineActivity(value: string) {
-  return value
-    .replace(/\bAdmission Activity\b/gi, "")
-    .replace(/\bDate \(.*?\)\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function extractTimelineItems(documents: SourceDocument[], language: SupportedLanguage) {
-  const items: string[] = [];
-
-  for (const document of documents.filter((entry) => entry.kind === "key-date")) {
-    const excerpt = getDocumentExcerpt(document);
-    const relevantText = excerpt.replace(/^.*?Admission Activity Date/iu, " ");
-    const matcher =
-      /([A-Za-z][A-Za-z/&(),\-\s]{6,}?)\s+(\d{2}\.\d{2}\.\d{4}(?:\s+to\s+\d{2}\.\d{2}\.\d{4})?)/g;
-
-    for (const match of relevantText.matchAll(matcher)) {
-      const activity = cleanTimelineActivity(match[1]);
-      const date = formatDateRange(match[2], language);
-
-      if (activity.length < 6) {
-        continue;
-      }
-
-      items.push(`${date} - ${activity}`);
-
-      if (items.length === 6) {
-        break;
-      }
-    }
-
-    if (items.length === 6) {
-      break;
-    }
-  }
-
-  if (items.length > 0) {
-    return Array.from(new Set(items));
-  }
-
-  return documents.slice(0, 4).map((document) => {
-    const issuedOn = formatIssuedOn(document.issuedOn, language);
-    return issuedOn ? `${issuedOn} - ${document.title}` : document.title;
-  });
-}
-
-function flattenRecommendationOptions(recommendations?: ReturnType<typeof buildRecommendations>) {
-  if (!recommendations) {
-    return [];
-  }
-
-  return [
-    ...recommendations.safeOptions.slice(0, 2),
-    ...recommendations.competitiveOptions.slice(0, 2),
-    ...recommendations.ambitiousOptions.slice(0, 2),
-  ].slice(0, 5);
-}
-
-function bucketLabel(bucket: RecommendationOption["bucket"], language: SupportedLanguage) {
-  if (language === "gu") {
-    if (bucket === "safe") {
-      return "સેફ બેન્ડ";
-    }
-
-    if (bucket === "competitive") {
-      return "સ્પર્ધાત્મક બેન્ડ";
-    }
-
-    return "આકાંક્ષી બેન્ડ";
-  }
-
-  if (bucket === "safe") {
-    return "Safe band";
-  }
-
-  if (bucket === "competitive") {
-    return "Competitive band";
-  }
-
-  return "Ambitious band";
-}
-
-function buildOptionsSection(
-  recommendations: ReturnType<typeof buildRecommendations> | undefined,
-  language: SupportedLanguage,
-) {
-  const options = flattenRecommendationOptions(recommendations).map((option) => {
-    const meta = [
-      bucketLabel(option.bucket, language),
-      typeof option.closingRank === "number"
-        ? language === "gu"
-          ? `ક્લોઝિંગ રેન્ક ${option.closingRank}`
-          : `Closing rank ${option.closingRank}`
-        : null,
-      option.category,
-      option.instituteType,
-    ].filter(Boolean) as string[];
-
-    return {
-      label: option.combinedLabel,
-      detail: option.rationale,
-      meta,
-      bucket: option.bucket,
-    } satisfies ChatOptionItem;
-  });
-
-  return options;
-}
-
-function buildOperationalChecklist(
-  responseKind: ChatResponseKind,
-  courseLabel: string,
-  language: SupportedLanguage,
-  recommendations?: ReturnType<typeof buildRecommendations>,
-) {
-  if (recommendations?.nextSteps.length) {
-    return recommendations.nextSteps.slice(0, 4);
-  }
-
-  if (language === "gu") {
-    switch (responseKind) {
-      case "schedule":
-        return [
-          "છેલ્લી તારીખ પહેલાં નોંધણી અને ફી ચુકવણી પૂર્ણ કરો.",
-          "પ્રોવિઝનલ અને ફાઇનલ મેરિટ જાહેર થયા પછી પોર્ટલ ફરી તપાસો.",
-          "મોક રાઉન્ડ અને અંતિમ પસંદગીઓની વિન્ડો દરમિયાન ફેરફારો સમયસર પૂર્ણ કરો.",
-        ];
-      case "documents":
-        return [
-          "બ્રોશર અને સૂચનાઓમાં દર્શાવેલી દસ્તાવેજ યાદી સામે તમારી ફાઇલ ચકાસો.",
-          "અપલોડ માટે વાંચી શકાય તેવી નકલો અને ચકાસણી માટે ઓરિજિનલ બંને તૈયાર રાખો.",
-          "નામ, જન્મતારીખ, ગુણ, કેટેગરી અને સંપર્ક વિગતો તમામ દસ્તાવેજોમાં મેળ ખાતી હોવી જોઈએ.",
-        ];
-      case "eligibility":
-        return [
-          "લાયકાત, પ્રવેશ આધાર અને કેટેગરી નિયમો સત્તાવાર દસ્તાવેજ સામે મેળવો.",
-          "જો કોઈ શરતી નિયમ લાગુ પડે તો સંબંધિત માર્ગદર્શિકા ફરી તપાસો.",
-          "અંતિમ ફોર્મ ભરતા પહેલાં પ્રવેશ પોર્ટલ પર અપડેટ્સ જુઓ.",
-        ];
-      case "recommendation":
-        return [
-          "મેરિટ રેન્ક, કેટેગરી, પસંદગીની શાખા અને શહેર શેર કરો.",
-          `${courseLabel} માટે સેફ, સ્પર્ધાત્મક અને આકાંક્ષી વિકલ્પોનું સંતુલન રાખો.`,
-          "ફાઇનલ પસંદગી લોક કરતાં પહેલાં સત્તાવાર કી-ડેટ્સ તપાસો.",
-        ];
-      default:
-        return [
-          "સત્તાવાર પોર્ટલ પર હાલની સૂચનાઓ દૈનિક તપાસો.",
-          "ફાઇનલ સબમિશન પહેલાં દસ્તાવેજો અને સમયમર્યાદા બંને ચકાસો.",
-          `${courseLabel} માટે કોર્સ-સ્પેસિફિક અપડેટ્સ અલગથી તપાસો.`,
-        ];
-    }
-  }
-
-  switch (responseKind) {
-    case "schedule":
-      return [
-        "Complete registration and fee payment before the published deadline.",
-        "Recheck the portal when provisional and final merit events are published.",
-        "Finish mock-round and final choice updates within the active window.",
-      ];
-    case "documents":
-      return [
-        "Check your file against the latest brochure and instruction set.",
-        "Keep readable upload copies and original documents ready for verification.",
-        "Verify name, date of birth, marks, category, and contact details across all records.",
-      ];
-    case "eligibility":
-      return [
-        "Match admission basis, category rules, and qualifying criteria against the latest official document.",
-        "Recheck any conditional rule in the applicable guideline before submission.",
-        "Review portal updates again before locking the final application.",
-      ];
-    case "recommendation":
-      return [
-        "Share merit rank, category, preferred branches, and preferred locations.",
-        `Keep ${courseLabel} choices distributed across safe, competitive, and ambitious bands.`,
-        "Recheck the latest key dates before locking final preferences.",
-      ];
-    default:
-      return [
-        "Review the current official notice set on the ACPC portal.",
-        "Verify deadlines and document readiness before submission.",
-        `Track course-specific updates for ${courseLabel} separately.`,
-      ];
-  }
-}
-
-function buildAdvisoryNote(
-  retrieval: RetrievalResult,
-  language: SupportedLanguage,
-  recommendations?: ReturnType<typeof buildRecommendations>,
-) {
-  const advisoryLines = [
-    ...retrieval.advisories,
-    ...(recommendations?.warnings ?? []),
-  ].filter(Boolean);
-
-  if (advisoryLines.length > 0) {
-    return advisoryLines.join(" ");
-  }
-
-  if (language === "gu") {
-    return "સત્તાવાર પોર્ટલ, બ્રોશર અને રાઉન્ડ-વાઇઝ અપડેટ્સને અંતિમ સત્તાધિક સ્રોત માનો.";
-  }
-
-  return "Treat the official portal, brochure, and round-wise updates as the final authority.";
-}
-
-function buildSections(input: {
-  responseKind: ChatResponseKind;
-  language: SupportedLanguage;
-  courseLabel: string;
-  retrieval: RetrievalResult;
-  recommendations?: ReturnType<typeof buildRecommendations>;
-}) {
-  const referenceItems = input.retrieval.documents
-    .slice(0, 4)
-    .map((document) => document.title);
-
-  const sourceSectionTitle = input.language === "gu" ? "સત્તાવાર સંદર્ભ" : "Official References";
-  const conditionsTitle = input.language === "gu" ? "શરતો અને નોંધો" : "Conditions and Notes";
-
-  switch (input.responseKind) {
-    case "schedule":
-      return [
-        {
-          type: "timeline",
-          title: input.language === "gu" ? "મહત્વપૂર્ણ તારીખો" : "Important Dates",
-          items: extractTimelineItems(input.retrieval.documents, input.language),
-        },
-        {
-          type: "checklist",
-          title: input.language === "gu" ? "આગળની કાર્યવાહી" : "Required Actions",
-          items: buildOperationalChecklist(
-            input.responseKind,
-            input.courseLabel,
-            input.language,
-            input.recommendations,
-          ),
-        },
-        {
-          type: "note",
-          title: conditionsTitle,
-          content: buildAdvisoryNote(input.retrieval, input.language, input.recommendations),
-        },
-      ] satisfies ChatSection[];
-
-    case "documents":
-      return [
-        {
-          type: "checklist",
-          title: input.language === "gu" ? "દસ્તાવેજ ચેકલિસ્ટ" : "Document Checklist",
-          items: buildOperationalChecklist(
-            input.responseKind,
-            input.courseLabel,
-            input.language,
-            input.recommendations,
-          ),
-        },
-        {
-          type: "list",
-          title: sourceSectionTitle,
-          items: referenceItems,
-        },
-        {
-          type: "note",
-          title: conditionsTitle,
-          content: buildAdvisoryNote(input.retrieval, input.language, input.recommendations),
-        },
-      ] satisfies ChatSection[];
-
-    case "eligibility":
-    case "process":
-      return [
-        {
-          type: "checklist",
-          title: input.language === "gu" ? "ચકાસણી બિંદુઓ" : "Verification Checklist",
-          items: buildOperationalChecklist(
-            input.responseKind,
-            input.courseLabel,
-            input.language,
-            input.recommendations,
-          ),
-        },
-        {
-          type: "list",
-          title: sourceSectionTitle,
-          items: referenceItems,
-        },
-        {
-          type: "note",
-          title: conditionsTitle,
-          content: buildAdvisoryNote(input.retrieval, input.language, input.recommendations),
-        },
-      ] satisfies ChatSection[];
-
-    case "cutoff": {
-      const cutoffItems = input.retrieval.cutoffSummaries.slice(0, 5);
-
-      return [
-        cutoffItems.length > 0
-          ? {
-              type: "list",
-              title: input.language === "gu" ? "ક્લોઝર સંકેતો" : "Closure Signals",
-              items: cutoffItems,
-            }
-          : {
-              type: "list",
-              title: sourceSectionTitle,
-              items: referenceItems,
-            },
-        {
-          type: "note",
-          title: input.language === "gu" ? "સાવચેતીઓ" : "Cautions",
-          content: buildAdvisoryNote(input.retrieval, input.language, input.recommendations),
-        },
-      ] satisfies ChatSection[];
-    }
-
-    case "contact":
-      return [
-        {
-          type: "list",
-          title: input.language === "gu" ? "સત્તાવાર સંપર્ક" : "Official Contact",
-          items: [...input.retrieval.advisories],
-        },
-        {
-          type: "note",
-          title: conditionsTitle,
-          content:
-            input.language === "gu"
-              ? "સક્રિય પ્રવેશ સમયગાળામાં હંમેશા સત્તાવાર પોર્ટલ અને હેલ્પડેસ્કનો જ ઉપયોગ કરો."
-              : "Use the official portal and helpdesk during active admission windows.",
-        },
-      ] satisfies ChatSection[];
-
-    case "recommendation": {
-      const options = buildOptionsSection(input.recommendations, input.language);
-
-      if (options.length === 0) {
-        return [
-          {
-            type: "checklist",
-            title: input.language === "gu" ? "જરૂરી પ્રોફાઇલ ઇનપુટ" : "Profile Inputs Required",
-            items: buildOperationalChecklist(
-              input.responseKind,
-              input.courseLabel,
-              input.language,
-              input.recommendations,
-            ),
-          },
-          {
-            type: "note",
-            title: input.language === "gu" ? "સાવચેતીઓ" : "Cautions",
-            content: buildAdvisoryNote(input.retrieval, input.language, input.recommendations),
-          },
-        ] satisfies ChatSection[];
-      }
-
-      return [
-        {
-          type: "options",
-          title: input.language === "gu" ? "સૂચવાયેલા વિકલ્પો" : "Suggested Options",
-          items: options,
-        },
-        {
-          type: "checklist",
-          title: input.language === "gu" ? "આગળની કાર્યવાહી" : "Required Actions",
-          items: buildOperationalChecklist(
-            input.responseKind,
-            input.courseLabel,
-            input.language,
-            input.recommendations,
-          ),
-        },
-        {
-          type: "note",
-          title: input.language === "gu" ? "સાવચેતીઓ" : "Cautions",
-          content: buildAdvisoryNote(input.retrieval, input.language, input.recommendations),
-        },
-      ] satisfies ChatSection[];
-    }
-
-    default:
-      return [
-        {
-          type: "list",
-          title: sourceSectionTitle,
-          items: referenceItems,
-        },
-        {
-          type: "checklist",
-          title: input.language === "gu" ? "આગળની કાર્યવાહી" : "Required Actions",
-          items: buildOperationalChecklist(
-            input.responseKind,
-            input.courseLabel,
-            input.language,
-            input.recommendations,
-          ),
-        },
-        {
-          type: "note",
-          title: conditionsTitle,
-          content: buildAdvisoryNote(input.retrieval, input.language, input.recommendations),
-        },
-      ] satisfies ChatSection[];
-  }
-}
-
-export function classifyQuestion(
-  message: string,
-  studentProfile?: ChatRequest["studentProfile"],
-): ChatResponseKind {
-  const normalized = normalizeForSearch(`${message} ${JSON.stringify(studentProfile ?? {})}`);
-
-  if (hasKeyword(normalized, QUESTION_KEYWORDS.contact)) {
-    return "contact";
-  }
-
-  if (hasKeyword(normalized, QUESTION_KEYWORDS.recommendation)) {
-    return "recommendation";
-  }
-
-  if (hasKeyword(normalized, QUESTION_KEYWORDS.cutoff)) {
-    return "cutoff";
-  }
-
-  if (hasKeyword(normalized, QUESTION_KEYWORDS.schedule)) {
-    return "schedule";
-  }
-
-  if (hasKeyword(normalized, QUESTION_KEYWORDS.documents)) {
-    return "documents";
-  }
-
-  if (hasKeyword(normalized, QUESTION_KEYWORDS.eligibility)) {
-    return "eligibility";
-  }
-
-  if (hasKeyword(normalized, QUESTION_KEYWORDS.process)) {
-    return "process";
-  }
-
-  return studentProfile?.meritRank ? "recommendation" : "general";
 }
 
 export function buildFallbackChatResponse(input: {
@@ -818,116 +406,29 @@ export function buildFallbackChatResponse(input: {
   const courseLabel = courseCode
     ? (getCourseDefinition(courseCode)?.label ?? "Selected course")
     : "ACPC course";
-  const sources = buildSourceReferences(input.retrieval.documents);
-  const sections = buildSections({
-    responseKind: input.responseKind,
-    language: input.language,
-    courseLabel,
-    retrieval: {
-      ...input.retrieval,
-      advisories: [...input.retrieval.advisories, ...(input.extraNotes ?? [])],
-    },
-    recommendations: input.recommendations,
-  });
 
   return {
     language: input.language,
     deliveryMode: "fallback",
     selectedCourse: courseCode,
     responseKind: input.responseKind,
-    title: buildTitle(input.responseKind, courseLabel, input.language),
-    summary: buildSummary({
-      courseLabel,
-      responseKind: input.responseKind,
+    answer: buildFallbackAnswer({
       language: input.language,
+      responseKind: input.responseKind,
+      courseLabel,
       retrieval: input.retrieval,
       recommendations: input.recommendations,
+      extraNotes: input.extraNotes,
     }),
-    sections,
-    sources,
+    highlights: buildFallbackHighlights({
+      responseKind: input.responseKind,
+      retrieval: input.retrieval,
+      recommendations: input.recommendations,
+      language: input.language,
+    }),
+    sources: buildSourceReferences(input.retrieval.documents),
     suggestions: buildLocalizedSuggestions(input.language),
   } satisfies ChatResponse;
-}
-
-function normalizeOptionItem(value: unknown): ChatOptionItem | null {
-  if (typeof value === "string") {
-    const label = value.trim();
-    return label ? { label } : null;
-  }
-
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const input = value as Record<string, unknown>;
-  const label = normalizeString(input.label);
-  const detail = normalizeString(input.detail);
-  const meta = normalizeStringArray(input.meta);
-  const bucket = normalizeString(input.bucket);
-
-  if (!label) {
-    return null;
-  }
-
-  return {
-    label,
-    detail: detail || undefined,
-    meta: meta.length > 0 ? meta : undefined,
-    bucket:
-      bucket === "safe" || bucket === "competitive" || bucket === "ambitious"
-        ? bucket
-        : undefined,
-  };
-}
-
-function normalizeSection(value: unknown): ChatSection | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const input = value as Record<string, unknown>;
-  const rawType = normalizeString(input.type);
-  const title = normalizeString(input.title) || "Section";
-
-  if (rawType === "note") {
-    const content =
-      normalizeString(input.content) || normalizeStringArray(input.items).join(" ");
-    return content ? { type: "note", title, content } : null;
-  }
-
-  if (rawType === "options") {
-    const items = Array.isArray(input.items)
-      ? input.items.map((item) => normalizeOptionItem(item)).filter(Boolean)
-      : [];
-
-    return items.length > 0
-      ? {
-          type: "options",
-          title,
-          items: items as ChatOptionItem[],
-        }
-      : null;
-  }
-
-  const items = normalizeStringArray(input.items);
-
-  if (items.length === 0) {
-    return null;
-  }
-
-  if (rawType === "timeline" || rawType === "checklist" || rawType === "list") {
-    return {
-      type: rawType,
-      title,
-      items,
-    };
-  }
-
-  return {
-    type: "list",
-    title,
-    items,
-  };
 }
 
 export function normalizeModelResponse(raw: unknown, fallback: ChatResponse): ChatResponse {
@@ -936,39 +437,19 @@ export function normalizeModelResponse(raw: unknown, fallback: ChatResponse): Ch
   }
 
   const input = raw as Record<string, unknown>;
-  const title = normalizeString(input.title) || fallback.title;
-  const summary = normalizeString(input.summary) || fallback.summary;
-  const sections = Array.isArray(input.sections)
-    ? input.sections.map((section) => normalizeSection(section)).filter(Boolean)
-    : [];
+  const answer = normalizeString(input.answer);
+  const highlights = normalizeStringArray(input.highlights).slice(0, 6);
   const suggestions = normalizeStringArray(input.suggestions).slice(0, 4);
 
-  if (fallback.responseKind === "schedule") {
-    return {
-      ...fallback,
-      deliveryMode: "grounded",
-      title,
-      summary,
-      suggestions: suggestions.length > 0 ? suggestions : fallback.suggestions,
-    };
-  }
-
-  if (sections.length < Math.min(2, fallback.sections.length)) {
-    return {
-      ...fallback,
-      deliveryMode: "grounded",
-      title,
-      summary,
-      suggestions: suggestions.length > 0 ? suggestions : fallback.suggestions,
-    };
+  if (!answer) {
+    return fallback;
   }
 
   return {
     ...fallback,
     deliveryMode: "grounded",
-    title,
-    summary,
-    sections: sections as ChatSection[],
+    answer,
+    highlights: highlights.length > 0 ? highlights : fallback.highlights,
     suggestions: suggestions.length > 0 ? suggestions : fallback.suggestions,
   };
 }

@@ -39,17 +39,17 @@ function buildSystemPrompt(language: ChatRequest["language"], responseKind: stri
     "You are ACPC Admission Support.",
     "Use only the provided official context for factual claims.",
     "Keep the tone institutional, direct, and operational.",
-    "Do not write like a chatbot. Do not use greetings, reassurance, or filler.",
-    "Separate verified official facts from operational guidance.",
+    "Answer in a natural GPT-like style: direct, useful, and easy to read.",
+    "Do not sound robotic or like a report generator.",
+    "Avoid headings unless absolutely necessary.",
+    "Use short bullet points only if they improve clarity.",
     "If the context is insufficient, say that directly instead of guessing.",
     `Write the response in ${language === "gu" ? "Gujarati" : "English"}.`,
     `The response kind is ${responseKind}.`,
-    "Return valid JSON with exactly these keys: title, summary, sections, suggestions.",
-    "sections must be an array of objects.",
-    "Allowed section types: timeline, checklist, list, note, options.",
-    "For timeline/checklist/list sections, use: { type, title, items: string[] }.",
-    "For note sections, use: { type: 'note', title, content: string }.",
-    "For options sections, use: { type: 'options', title, items: [{ label, detail, meta?: string[], bucket?: 'safe'|'competitive'|'ambitious' }] }.",
+    "Return valid JSON with exactly these keys: answer, highlights, suggestions.",
+    "answer must be a single helpful response string.",
+    "highlights must be a short array of supporting bullet lines when useful, otherwise an empty array.",
+    "suggestions must be a short array of follow-up prompts.",
     "Do not include markdown fences or prose outside the JSON object.",
   ].join(" ");
 }
@@ -162,7 +162,7 @@ export async function createChatResponse(input: ChatRequest): Promise<ChatRespon
     const normalized = normalizeModelResponse(parsed, fallback);
 
     if (language === "gu") {
-      const gujaratiPayload = `${normalized.title} ${normalized.summary} ${JSON.stringify(normalized.sections)}`;
+      const gujaratiPayload = `${normalized.answer} ${JSON.stringify(normalized.highlights)}`;
 
       if (hasMojibake(gujaratiPayload) || !containsGujaratiCharacters(gujaratiPayload)) {
         return fallback;

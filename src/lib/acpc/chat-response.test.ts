@@ -35,10 +35,11 @@ test("buildFallbackChatResponse preserves readable Gujarati text", () => {
   });
 
   assert.equal(hasMojibake(JSON.stringify(response)), false);
-  assert.ok(response.sections.length >= 2);
+  assert.equal(typeof response.answer, "string");
+  assert.ok(response.answer.length > 20);
 });
 
-test("normalizeModelResponse coerces structured strings safely", () => {
+test("normalizeModelResponse coerces natural answer payload safely", () => {
   const retrieval = retrieveGroundedContext({
     message: "Explain the latest key dates for degree engineering admission.",
     selectedCourse: "degree-engineering",
@@ -54,32 +55,20 @@ test("normalizeModelResponse coerces structured strings safely", () => {
 
   const normalized = normalizeModelResponse(
     {
-      title: "Degree Engineering official timeline",
-      summary: "This note uses the current official ACPC schedule.",
-      sections: [
-        {
-          type: "checklist",
-          title: "Required Actions",
-          items: "Review the key dates. Keep documents ready.",
-        },
-        {
-          type: "note",
-          title: "Conditions",
-          content: "Verify the official portal before locking final choices.",
-        },
-      ],
-      suggestions: "Check documents. Compare rank options.",
+      answer:
+        "The current ACPC key-date notice shows registration closing on 31 May 2026, provisional merit on 12 June 2026, and final merit on 17 June 2026.",
+      highlights:
+        "31 May 2026: registration closes; 12 June 2026: provisional merit; 17 June 2026: final merit",
+      suggestions: "List the documents I should keep ready.; Explain mock round choice filling.",
     },
     fallback,
   );
 
   assert.equal(normalized.deliveryMode, "grounded");
-  assert.equal(normalized.sections[0]?.type, "timeline");
-  assert.equal(normalized.title, "Degree Engineering official timeline");
-  assert.equal(normalized.summary, "This note uses the current official ACPC schedule.");
-
+  assert.match(normalized.answer, /31 May 2026/);
+  assert.ok(normalized.highlights.length >= 1);
   assert.deepEqual(normalized.suggestions, [
-    "Check documents",
-    "Compare rank options.",
+    "List the documents I should keep ready.",
+    "Explain mock round choice filling.",
   ]);
 });

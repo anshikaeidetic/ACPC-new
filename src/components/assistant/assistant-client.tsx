@@ -3,15 +3,9 @@
 import { useState } from "react";
 
 import { COURSE_DEFINITIONS } from "@/lib/acpc/course-definitions";
-import {
-  ChatOptionItem,
-  ChatResponse,
-  ChatSection,
-  CourseCode,
-  SupportedLanguage,
-} from "@/lib/acpc/types";
+import { ChatResponse, CourseCode, SupportedLanguage } from "@/lib/acpc/types";
 
-const QUICK_PROMPTS = {
+const QUICK_PROMPTS: Record<SupportedLanguage, string[]> = {
   en: [
     "What are the latest key dates for degree engineering admission?",
     "Which documents should I verify before registration?",
@@ -22,227 +16,47 @@ const QUICK_PROMPTS = {
     "રજીસ્ટ્રેશન પહેલાં કયા દસ્તાવેજો ચકાસવા જોઈએ?",
     "મારી પ્રોફાઇલ મુજબ યોગ્ય કોલેજ વિકલ્પો સૂચવો.",
   ],
-} satisfies Record<SupportedLanguage, string[]>;
+};
 
-const UI_COPY = {
-  en: {
-    workspaceLabel: "ACPC Support Desk",
-    workspaceNote: "Structured official note workspace",
-    questionLabel: "Current Query",
-    placeholderTitle: "ACPC structured support",
-    placeholderBody:
-      "Ask one admission question at a time. The response is assembled as a course-specific note grounded in synchronized official ACPC sources.",
-    placeholderComposer: "Ask about dates, documents, eligibility, process, cutoff, or options...",
-    loading: "Preparing grounded note...",
-    send: "Send",
-    sending: "Preparing...",
-    sourceLabel: "Sources",
-    suggestionsLabel: "Suggested follow-ups",
-    fallbackLabel: "Source-backed mode",
-    groundedLabel: "Structured response",
-    errorFallback: "Unable to prepare the ACPC note right now.",
-    english: "English",
-    gujarati: "Gujarati",
-  },
-  gu: {
-    workspaceLabel: "ACPC સહાય ડેસ્ક",
-    workspaceNote: "ગોઠવાયેલ સત્તાવાર નોંધ વર્કસ્પેસ",
-    questionLabel: "હાલનો પ્રશ્ન",
-    placeholderTitle: "ACPC ગોઠવાયેલ સહાય",
-    placeholderBody:
-      "એક વખતે એક જ પ્રવેશ પ્રશ્ન પૂછો. જવાબ સમન્વયિત સત્તાવાર ACPC સ્રોતો પરથી કોર્સ-વિશિષ્ટ નોંધ તરીકે આપવામાં આવશે.",
-    placeholderComposer: "તારીખો, દસ્તાવેજો, યોગ્યતા, પ્રક્રિયા, કટઓફ અથવા વિકલ્પો વિશે પૂછો...",
-    loading: "સોર્સ આધારિત નોંધ તૈયાર થઈ રહી છે...",
-    send: "મોકલો",
-    sending: "તૈયાર થઈ રહ્યું છે...",
-    sourceLabel: "સ્રોતો",
-    suggestionsLabel: "આગળ પૂછવા યોગ્ય મુદ્દા",
-    fallbackLabel: "સોર્સ આધારિત મોડ",
-    groundedLabel: "ગોઠવાયેલ જવાબ",
-    errorFallback: "હાલ ACPC નોંધ તૈયાર કરી શકાતી નથી.",
-    english: "English",
-    gujarati: "ગુજરાતી",
-  },
-} satisfies Record<
+const UI_COPY: Record<
   SupportedLanguage,
   {
-    workspaceLabel: string;
-    workspaceNote: string;
-    questionLabel: string;
-    placeholderTitle: string;
-    placeholderBody: string;
-    placeholderComposer: string;
+    emptyTitle: string;
+    emptyBody: string;
+    placeholder: string;
     loading: string;
     send: string;
     sending: string;
-    sourceLabel: string;
-    suggestionsLabel: string;
-    fallbackLabel: string;
-    groundedLabel: string;
-    errorFallback: string;
-    english: string;
-    gujarati: string;
+    suggestions: string;
+    sources: string;
+    error: string;
   }
->;
-
-function bucketClasses(bucket?: ChatOptionItem["bucket"]) {
-  if (bucket === "safe") {
-    return "border-[#cfe4d7] bg-[#edf7f0] text-[#24553d]";
-  }
-
-  if (bucket === "competitive") {
-    return "border-[#f0dcc0] bg-[#fbf3e8] text-[#8a5520]";
-  }
-
-  if (bucket === "ambitious") {
-    return "border-[#ead0d0] bg-[#fbf1f1] text-[#7d3434]";
-  }
-
-  return "border-[var(--border-soft)] bg-white text-[var(--ink-700)]";
-}
-
-function renderListItems(items: string[]) {
-  return (
-    <ul className="grid gap-2 text-sm leading-7 text-[var(--ink-700)]">
-      {items.map((item) => (
-        <li
-          key={item}
-          className="rounded-2xl border border-[rgba(16,42,67,0.08)] bg-white px-4 py-3"
-        >
-          {item}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function renderSection(section: ChatSection) {
-  if (section.type === "note") {
-    return (
-      <div className="rounded-[1.4rem] border border-[rgba(16,42,67,0.08)] bg-white px-4 py-4">
-        <p className="text-sm font-semibold text-[var(--ink-900)]">{section.title}</p>
-        <p className="mt-2 text-sm leading-7 text-[var(--ink-700)]">{section.content}</p>
-      </div>
-    );
-  }
-
-  if (section.type === "options") {
-    return (
-      <div className="grid gap-3">
-        {section.items.map((item) => (
-          <div
-            key={`${item.label}-${item.bucket ?? "general"}`}
-            className="rounded-[1.4rem] border border-[rgba(16,42,67,0.08)] bg-white px-4 py-4"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <p className="max-w-2xl text-sm font-semibold leading-6 text-[var(--ink-900)]">
-                {item.label}
-              </p>
-              {item.bucket ? (
-                <span
-                  className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${bucketClasses(item.bucket)}`}
-                >
-                  {item.bucket}
-                </span>
-              ) : null}
-            </div>
-            {item.detail ? (
-              <p className="mt-2 text-sm leading-7 text-[var(--ink-700)]">{item.detail}</p>
-            ) : null}
-            {item.meta?.length ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {item.meta.map((entry) => (
-                  <span
-                    key={entry}
-                    className="rounded-full border border-[rgba(16,42,67,0.08)] bg-[#f8f5ef] px-3 py-1 text-xs font-medium text-[var(--ink-500)]"
-                  >
-                    {entry}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return renderListItems(section.items);
-}
-
-function ResponseView(props: {
-  response: ChatResponse;
-  submittedQuestion: string;
-  language: SupportedLanguage;
-}) {
-  const copy = UI_COPY[props.language];
-
-  return (
-    <div className="space-y-5">
-      <div className="rounded-[1.6rem] border border-[rgba(16,42,67,0.08)] bg-white px-5 py-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--surface-accent)]">
-              {copy.questionLabel}
-            </p>
-            <p className="mt-2 text-sm leading-7 text-[var(--ink-700)]">{props.submittedQuestion}</p>
-          </div>
-          <span className="rounded-full border border-[rgba(16,42,67,0.08)] bg-[#f8f5ef] px-3 py-1 text-xs font-semibold text-[var(--ink-500)]">
-            {props.response.deliveryMode === "grounded" ? copy.groundedLabel : copy.fallbackLabel}
-          </span>
-        </div>
-
-        <div className="mt-5">
-          <p className="text-[1.35rem] font-semibold tracking-[-0.02em] text-[var(--ink-900)]">
-            {props.response.title}
-          </p>
-          <p className="mt-3 max-w-3xl text-sm leading-8 text-[var(--ink-700)]">
-            {props.response.summary}
-          </p>
-        </div>
-      </div>
-
-      <div className="grid gap-4">
-        {props.response.sections.map((section) => (
-          <section
-            key={`${section.type}-${section.title}`}
-            className="rounded-[1.6rem] border border-[rgba(16,42,67,0.08)] bg-[#fcfaf6] px-4 py-4"
-          >
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--surface-accent)]">
-              {section.title}
-            </p>
-            <div className="mt-3">{renderSection(section)}</div>
-          </section>
-        ))}
-      </div>
-
-      {props.response.sources.length > 0 ? (
-        <section className="rounded-[1.6rem] border border-[rgba(16,42,67,0.08)] bg-white px-4 py-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--surface-accent)]">
-            {copy.sourceLabel}
-          </p>
-          <div className="mt-3 grid gap-3">
-            {props.response.sources.map((source) => (
-              <a
-                key={source.url}
-                href={source.url}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-2xl border border-[rgba(16,42,67,0.08)] bg-[#faf7f1] px-4 py-3 text-sm leading-6 text-[var(--ink-700)] transition hover:border-[rgba(198,123,40,0.3)]"
-              >
-                <span className="block font-semibold text-[var(--ink-900)]">{source.title}</span>
-                <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-[var(--ink-500)]">
-                  {source.kind}
-                  {source.issuedOn ? ` • ${source.issuedOn}` : ""}
-                </span>
-              </a>
-            ))}
-          </div>
-        </section>
-      ) : null}
-    </div>
-  );
-}
+> = {
+  en: {
+    emptyTitle: "Ask ACPC anything",
+    emptyBody:
+      "Dates, documents, eligibility, choice filling, reporting, cutoff trends, or college options.",
+    placeholder: "Ask your admission question...",
+    loading: "Thinking through the official ACPC sources...",
+    send: "Send",
+    sending: "Sending...",
+    suggestions: "Try asking",
+    sources: "Sources",
+    error: "The response could not be prepared right now.",
+  },
+  gu: {
+    emptyTitle: "ACPC ને પ્રશ્ન પૂછો",
+    emptyBody:
+      "તારીખો, દસ્તાવેજો, યોગ્યતા, ચોઇસ ફિલિંગ, રિપોર્ટિંગ, કટઓફ ટ્રેન્ડ્સ અથવા કોલેજ વિકલ્પો વિશે પૂછો.",
+    placeholder: "તમારો પ્રવેશ સંબંધિત પ્રશ્ન લખો...",
+    loading: "સત્તાવાર ACPC સ્રોતો પરથી જવાબ તૈયાર થઈ રહ્યો છે...",
+    send: "મોકલો",
+    sending: "મોકલાઈ રહ્યું છે...",
+    suggestions: "આ પણ પૂછો",
+    sources: "Sources",
+    error: "હાલ જવાબ તૈયાર કરી શકાતો નથી.",
+  },
+};
 
 function isChatResponse(value: unknown): value is ChatResponse {
   if (!value || typeof value !== "object") {
@@ -251,11 +65,31 @@ function isChatResponse(value: unknown): value is ChatResponse {
 
   const input = value as Record<string, unknown>;
   return (
-    typeof input.title === "string" &&
-    typeof input.summary === "string" &&
-    Array.isArray(input.sections) &&
+    typeof input.answer === "string" &&
+    Array.isArray(input.highlights) &&
     Array.isArray(input.sources) &&
     Array.isArray(input.suggestions)
+  );
+}
+
+function AssistantMessage(props: { response: ChatResponse }) {
+  return (
+    <div className="max-w-[84%] rounded-[1.6rem] border border-[rgba(16,42,67,0.08)] bg-white px-5 py-4 shadow-[0_12px_30px_rgba(16,42,67,0.06)]">
+      <div className="whitespace-pre-wrap text-[15px] leading-8 text-[var(--ink-900)]">
+        {props.response.answer}
+      </div>
+
+      {props.response.highlights.length > 0 ? (
+        <ul className="mt-4 grid gap-2 text-sm leading-7 text-[var(--ink-700)]">
+          {props.response.highlights.map((item) => (
+            <li key={item} className="flex gap-3">
+              <span className="mt-[0.7rem] h-1.5 w-1.5 rounded-full bg-[var(--surface-accent)]" />
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
@@ -269,7 +103,7 @@ export function AssistantClient() {
   const [error, setError] = useState("");
 
   const copy = UI_COPY[language];
-  const activeSuggestions = response?.suggestions?.length ? response.suggestions : QUICK_PROMPTS[language];
+  const prompts = response?.suggestions?.length ? response.suggestions : QUICK_PROMPTS[language];
 
   async function submitMessage(currentMessage: string) {
     const trimmedMessage = currentMessage.trim();
@@ -300,13 +134,13 @@ export function AssistantClient() {
       if (!apiResponse.ok) {
         const errorMessage =
           payload && typeof payload === "object" && "error" in payload
-            ? String((payload as { error?: string }).error || copy.errorFallback)
-            : copy.errorFallback;
+            ? String((payload as { error?: string }).error || copy.error)
+            : copy.error;
         throw new Error(errorMessage);
       }
 
       if (!isChatResponse(payload)) {
-        throw new Error(copy.errorFallback);
+        throw new Error(copy.error);
       }
 
       setResponse(payload);
@@ -314,7 +148,7 @@ export function AssistantClient() {
       setError(
         submissionError instanceof Error && submissionError.message
           ? submissionError.message
-          : copy.errorFallback,
+          : copy.error,
       );
     } finally {
       setLoading(false);
@@ -322,15 +156,12 @@ export function AssistantClient() {
   }
 
   return (
-    <section className="w-full max-w-[980px]">
-      <div className="overflow-hidden rounded-[2rem] border border-[rgba(16,42,67,0.08)] bg-white/88 shadow-[0_28px_80px_rgba(16,42,67,0.12)] backdrop-blur">
-        <div className="flex flex-col gap-4 border-b border-[rgba(16,42,67,0.08)] px-5 py-4 md:flex-row md:items-center md:justify-between">
+    <section className="w-full max-w-[940px]">
+      <div className="overflow-hidden rounded-[2rem] border border-[rgba(16,42,67,0.08)] bg-white/90 shadow-[0_28px_80px_rgba(16,42,67,0.12)] backdrop-blur">
+        <div className="flex items-center justify-between border-b border-[rgba(16,42,67,0.08)] px-5 py-4">
           <div className="flex items-center gap-3">
             <span className="h-2.5 w-2.5 rounded-full bg-[var(--surface-green)]" />
-            <div>
-              <p className="text-sm font-semibold text-[var(--ink-900)]">{copy.workspaceLabel}</p>
-              <p className="text-xs tracking-[0.08em] text-[var(--ink-500)]">{copy.workspaceNote}</p>
-            </div>
+            <p className="text-sm font-semibold text-[var(--ink-900)]">ACPC</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -361,47 +192,63 @@ export function AssistantClient() {
                       : "text-[var(--ink-500)]"
                   }`}
                 >
-                  {value === "en" ? copy.english : copy.gujarati}
+                  {value === "en" ? "English" : "ગુજરાતી"}
                 </button>
               ))}
             </div>
           </div>
         </div>
 
-        <div className="px-4 py-5 md:px-6">
-          <div className="min-h-[30rem] rounded-[1.8rem] border border-[rgba(16,42,67,0.06)] bg-[#f7f4ee] px-4 py-4 md:px-5 md:py-5">
-            {loading ? (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 text-sm text-[var(--ink-500)]">
-                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[var(--surface-accent)]" />
-                  <span>{copy.loading}</span>
-                </div>
-                <div className="space-y-3 rounded-[1.6rem] border border-[rgba(16,42,67,0.08)] bg-white px-5 py-5">
-                  <div className="h-4 w-40 rounded-full bg-[#ece6d8]" />
-                  <div className="h-4 w-full rounded-full bg-[#f1ebde]" />
-                  <div className="h-4 w-[88%] rounded-full bg-[#f1ebde]" />
-                  <div className="h-4 w-[72%] rounded-full bg-[#f1ebde]" />
+        <div className="min-h-[33rem] bg-[#f7f4ee] px-4 py-5 md:px-6">
+          {loading ? (
+            <div className="flex h-full min-h-[24rem] items-center justify-center">
+              <div className="rounded-[1.5rem] border border-[rgba(16,42,67,0.08)] bg-white px-5 py-4 text-sm text-[var(--ink-500)]">
+                {copy.loading}
+              </div>
+            </div>
+          ) : response ? (
+            <div className="space-y-5">
+              <div className="flex justify-end">
+                <div className="max-w-[72%] rounded-[1.4rem] bg-[var(--surface-strong)] px-4 py-3 text-sm leading-7 text-white">
+                  {submittedQuestion}
                 </div>
               </div>
-            ) : response ? (
-              <ResponseView
-                response={response}
-                submittedQuestion={submittedQuestion}
-                language={language}
-              />
-            ) : (
-              <div className="flex h-full min-h-[26rem] flex-col items-center justify-center text-center">
-                <div className="max-w-2xl rounded-[1.8rem] border border-[rgba(16,42,67,0.08)] bg-white px-6 py-8">
-                  <p className="text-[1.5rem] font-semibold tracking-[-0.02em] text-[var(--ink-900)]">
-                    {copy.placeholderTitle}
-                  </p>
-                  <p className="mt-3 text-sm leading-8 text-[var(--ink-700)]">
-                    {copy.placeholderBody}
-                  </p>
-                </div>
+
+              <div className="flex justify-start">
+                <AssistantMessage response={response} />
               </div>
-            )}
-          </div>
+
+              {response.sources.length > 0 ? (
+                <div className="pl-1">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ink-500)]">
+                    {copy.sources}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {response.sources.map((source) => (
+                      <a
+                        key={source.url}
+                        href={source.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-full border border-[rgba(16,42,67,0.08)] bg-white px-3 py-2 text-xs font-medium text-[var(--ink-700)] transition hover:border-[rgba(156,106,47,0.28)]"
+                      >
+                        {source.title}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="flex h-full min-h-[24rem] flex-col items-center justify-center text-center">
+              <div className="max-w-2xl">
+                <p className="text-[2rem] font-semibold tracking-[-0.03em] text-[var(--ink-900)]">
+                  {copy.emptyTitle}
+                </p>
+                <p className="mt-3 text-base leading-8 text-[var(--ink-500)]">{copy.emptyBody}</p>
+              </div>
+            </div>
+          )}
 
           {error ? (
             <div className="mt-4 rounded-[1.3rem] border border-[rgba(143,45,45,0.18)] bg-[#fcf4f4] px-4 py-3 text-sm text-[#7d3434]">
@@ -409,17 +256,17 @@ export function AssistantClient() {
             </div>
           ) : null}
 
-          <div className="mt-4">
+          <div className="mt-6">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ink-500)]">
-              {copy.suggestionsLabel}
+              {copy.suggestions}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              {activeSuggestions.map((prompt) => (
+              {prompts.map((prompt) => (
                 <button
                   key={prompt}
                   type="button"
                   onClick={() => setMessage(prompt)}
-                  className="rounded-full border border-[rgba(16,42,67,0.08)] bg-white px-4 py-2 text-sm font-medium text-[var(--ink-700)] transition hover:border-[rgba(198,123,40,0.3)]"
+                  className="rounded-full border border-[rgba(16,42,67,0.08)] bg-white px-4 py-2 text-sm font-medium text-[var(--ink-700)] transition hover:border-[rgba(156,106,47,0.28)]"
                 >
                   {prompt}
                 </button>
@@ -439,7 +286,7 @@ export function AssistantClient() {
               onChange={(event) => setMessage(event.target.value)}
               rows={4}
               className="w-full resize-none bg-transparent text-base leading-7 text-[var(--ink-900)] outline-none placeholder:text-[var(--ink-500)]"
-              placeholder={copy.placeholderComposer}
+              placeholder={copy.placeholder}
             />
 
             <div className="mt-4 flex items-center justify-end">

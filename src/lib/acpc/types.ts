@@ -182,58 +182,13 @@ export interface SourceReference {
   issuedOn?: string;
 }
 
-export interface TimelineSection {
-  type: "timeline";
-  title: string;
-  items: string[];
-}
-
-export interface ListSection {
-  type: "list";
-  title: string;
-  items: string[];
-}
-
-export interface ChecklistSection {
-  type: "checklist";
-  title: string;
-  items: string[];
-}
-
-export interface NoteSection {
-  type: "note";
-  title: string;
-  content: string;
-}
-
-export interface ChatOptionItem {
-  label: string;
-  detail?: string;
-  meta?: string[];
-  bucket?: RecommendationOption["bucket"];
-}
-
-export interface OptionsSection {
-  type: "options";
-  title: string;
-  items: ChatOptionItem[];
-}
-
-export type ChatSection =
-  | TimelineSection
-  | ListSection
-  | ChecklistSection
-  | NoteSection
-  | OptionsSection;
-
 export interface ChatResponse {
   language: SupportedLanguage;
   deliveryMode: "grounded" | "fallback";
   selectedCourse?: CourseCode;
   responseKind: ChatResponseKind;
-  title: string;
-  summary: string;
-  sections: ChatSection[];
+  answer: string;
+  highlights: string[];
   sources: SourceReference[];
   suggestions: string[];
 }
