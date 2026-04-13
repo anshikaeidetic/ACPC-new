@@ -20,7 +20,7 @@ const KIND_PRIORITY: Record<ChatResponseKind, DocumentKind[]> = {
 };
 
 function normalize(value: string) {
-  return value.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ");
+  return value.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s]/gu, " ");
 }
 
 function tokenize(value: string) {

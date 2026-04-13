@@ -112,7 +112,7 @@ const QUESTION_KEYWORDS: Record<Exclude<ChatResponseKind, "general">, string[]> 
 };
 
 function normalizeForSearch(value: string) {
-  return value.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ");
+  return value.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s]/gu, " ");
 }
 
 function hasKeyword(message: string, keywords: string[]) {

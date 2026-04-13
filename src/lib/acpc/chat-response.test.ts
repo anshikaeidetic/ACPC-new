@@ -16,6 +16,10 @@ test("classifyQuestion identifies schedule queries", () => {
   );
 });
 
+test("classifyQuestion identifies Gujarati schedule queries", () => {
+  assert.equal(classifyQuestion("ડિગ્રી એન્જિનિયરિંગ માટે હાલની સત્તાવાર તારીખો શું છે?"), "schedule");
+});
+
 test("buildFallbackChatResponse preserves readable Gujarati text", () => {
   const retrieval = retrieveGroundedContext({
     message: "ડિગ્રી એન્જિનિયરિંગ માટે હાલની સત્તાવાર તારીખો શું છે?",
