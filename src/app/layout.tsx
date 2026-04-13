@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { Merriweather, Source_Sans_3 } from "next/font/google";
 import "./globals.css";
-import { SiteFooter } from "@/components/site-footer";
-import { SiteHeader } from "@/components/site-header";
 
 const bodyFont = Source_Sans_3({
   variable: "--font-source-sans",
@@ -32,11 +30,7 @@ export default function RootLayout({
       className={`${bodyFont.variable} ${headingFont.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-[var(--surface-base)] text-[var(--ink-900)]">
-        <div className="min-h-full">
-          <SiteHeader />
-          <main>{children}</main>
-          <SiteFooter />
-        </div>
+        {children}
       </body>
     </html>
   );
