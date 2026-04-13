@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test src/lib/acpc/document-parsers.test.ts src/lib/acpc/recommendations.test.ts src/lib/acpc/retrieval.test.ts"
+    "test": "node --import tsx --test src/lib/acpc/chat-response.test.ts src/lib/acpc/document-parsers.test.ts src/lib/acpc/recommendations.test.ts src/lib/acpc/retrieval.test.ts"
   },
   "dependencies": {
     "cheerio": "^1.2.0",

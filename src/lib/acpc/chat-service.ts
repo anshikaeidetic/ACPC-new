@@ -1,117 +1,103 @@
+import {
+  buildFallbackChatResponse,
+  classifyQuestion,
+  containsGujaratiCharacters,
+  getDocumentExcerpt,
+  hasMojibake,
+  normalizeModelResponse,
+} from "@/lib/acpc/chat-response";
 import { DEFAULT_GROQ_MODEL, extractJson, getGroqClient } from "@/lib/acpc/groq";
 import { buildRecommendations } from "@/lib/acpc/recommendations";
 import { retrieveGroundedContext } from "@/lib/acpc/retrieval";
-import { ChatRequest, ChatResponse, RecommendationOption, StudentProfile, SupportedLanguage } from "@/lib/acpc/types";
+import { ChatRequest, ChatResponse, ChatResponseKind, StudentProfile } from "@/lib/acpc/types";
 
-function localizedFollowUps(language: SupportedLanguage) {
-  if (language === "gu") {
-    return [
-      "મારી માટે જરૂરી દસ્તાવેજોની યાદી આપો.",
-      "મારા રેન્ક પ્રમાણે યોગ્ય કોલેજ વિકલ્પો બતાવો.",
-      "હાલના સત્તાવાર કી-ડેટ્સ સમજાવો.",
-    ];
-  }
+const MODEL_ASSISTED_RESPONSE_KINDS: ChatResponseKind[] = ["schedule"];
 
-  return [
-    "List the documents I should keep ready.",
-    "Suggest college options based on my rank.",
-    "Summarize the latest official dates for this course.",
-  ];
-}
-
-function flattenRecommendations(options: RecommendationOption[]) {
-  return options.slice(0, 4);
-}
-
-function buildFallbackResponse(input: {
-  language: SupportedLanguage;
-  selectedCourse?: StudentProfile["courseCode"];
-  retrieval: ReturnType<typeof retrieveGroundedContext>;
-  recommendations?: ReturnType<typeof buildRecommendations>;
-}): ChatResponse {
-  const topDocuments = input.retrieval.documents.slice(0, 3);
-  const sourceTitles = topDocuments.map((document) => document.title).join("; ");
-
-  const directAnswer =
-    input.language === "gu"
-      ? `પ્રમાણિત સ્રોતોના આધાર પર ઉપલબ્ધ માહિતી સંકલિત કરવામાં આવી છે. મુખ્ય સત્તાવાર દસ્તાવેજો: ${sourceTitles || "ACPC સત્તાવાર અપડેટ્સ"}.`
-      : `A grounded response has been assembled from the synchronized official sources. The most relevant documents right now are: ${sourceTitles || "official ACPC updates"}.`;
-
-  const warnings = [...input.retrieval.advisories];
-
-  if (!process.env.GROQ_API_KEY) {
-    warnings.push(
-      "Generative synthesis is unavailable until GROQ_API_KEY is configured. Source-backed fallback mode is active.",
-    );
+function buildRecommendationProfile(input: {
+  selectedCourse?: ChatRequest["selectedCourse"];
+  studentProfile?: ChatRequest["studentProfile"];
+  language: ChatRequest["language"];
+}) {
+  if (!input.selectedCourse || !input.studentProfile?.meritRank) {
+    return undefined;
   }
 
   return {
+    courseCode: input.selectedCourse,
+    meritRank: input.studentProfile.meritRank,
+    category: input.studentProfile.category,
+    preferredBranches: input.studentProfile.preferredBranches,
+    preferredLocations: input.studentProfile.preferredLocations,
+    instituteTypes: input.studentProfile.instituteTypes,
+    budgetSensitivity: input.studentProfile.budgetSensitivity,
     language: input.language,
-    mode: "fallback",
-    selectedCourse: input.retrieval.courseCode ?? input.selectedCourse,
-    directAnswer,
-    nextSteps:
-      input.recommendations?.nextSteps ??
-      (input.language === "gu"
-        ? ["સત્તાવાર કી-ડેટ્સ તપાસો.", "દસ્તાવેજોની તૈયારી કરો.", "રાઉન્ડ-વાઇઝ અપડેટ્સ પર નજર રાખો."]
-        : ["Review the latest key dates.", "Keep documents ready.", "Track round-wise official updates."]),
-    warnings,
-    recommendedOptions: flattenRecommendations([
-      ...(input.recommendations?.safeOptions ?? []),
-      ...(input.recommendations?.competitiveOptions ?? []),
-      ...(input.recommendations?.ambitiousOptions ?? []),
-    ]),
-    followUpPrompts: localizedFollowUps(input.language),
-    sources: topDocuments.map((document) => ({
-      title: document.title,
-      url: document.url,
-      kind: document.kind,
-    })),
-  };
+  } satisfies StudentProfile;
 }
 
-export async function createChatResponse(input: ChatRequest) {
+function buildSystemPrompt(language: ChatRequest["language"], responseKind: string) {
+  return [
+    "You are ACPC Admission Support.",
+    "Use only the provided official context for factual claims.",
+    "Keep the tone institutional, direct, and operational.",
+    "Do not write like a chatbot. Do not use greetings, reassurance, or filler.",
+    "Separate verified official facts from operational guidance.",
+    "If the context is insufficient, say that directly instead of guessing.",
+    `Write the response in ${language === "gu" ? "Gujarati" : "English"}.`,
+    `The response kind is ${responseKind}.`,
+    "Return valid JSON with exactly these keys: title, summary, sections, suggestions.",
+    "sections must be an array of objects.",
+    "Allowed section types: timeline, checklist, list, note, options.",
+    "For timeline/checklist/list sections, use: { type, title, items: string[] }.",
+    "For note sections, use: { type: 'note', title, content: string }.",
+    "For options sections, use: { type: 'options', title, items: [{ label, detail, meta?: string[], bucket?: 'safe'|'competitive'|'ambitious' }] }.",
+    "Do not include markdown fences or prose outside the JSON object.",
+  ].join(" ");
+}
+
+export async function createChatResponse(input: ChatRequest): Promise<ChatResponse> {
   const language = input.language ?? "en";
+  const responseKind = classifyQuestion(input.message, input.studentProfile);
   const retrieval = retrieveGroundedContext({
     message: input.message,
     selectedCourse: input.selectedCourse,
     studentProfile: input.studentProfile,
+    responseKind,
   });
 
   const selectedCourse = retrieval.courseCode ?? input.selectedCourse;
-  const recommendationProfile =
-    selectedCourse && input.studentProfile?.meritRank
-      ? ({
-          courseCode: selectedCourse,
-          meritRank: input.studentProfile.meritRank,
-          category: input.studentProfile.category,
-          preferredBranches: input.studentProfile.preferredBranches,
-          preferredLocations: input.studentProfile.preferredLocations,
-          instituteTypes: input.studentProfile.instituteTypes,
-          budgetSensitivity: input.studentProfile.budgetSensitivity,
-          language,
-        } satisfies StudentProfile)
-      : undefined;
-
+  const recommendationProfile = buildRecommendationProfile({
+    selectedCourse,
+    studentProfile: input.studentProfile,
+    language,
+  });
   const recommendations = recommendationProfile
     ? buildRecommendations(recommendationProfile)
     : undefined;
 
-  const fallback = buildFallbackResponse({
+  const fallback = buildFallbackChatResponse({
     language,
     selectedCourse,
+    responseKind,
     retrieval,
     recommendations,
+    extraNotes: !process.env.GROQ_API_KEY
+      ? [
+          language === "gu"
+            ? "GROQ_API_KEY સેટ ન હોવાથી જવાબ સુરક્ષિત સોર્સ આધારિત ફૉલબૅક મોડમાં આપવામાં આવ્યો છે."
+            : "GROQ_API_KEY is not configured, so the response is being served in source-backed fallback mode.",
+        ]
+      : undefined,
   });
 
   const client = getGroqClient();
 
-  if (!client) {
+  if (!client || !MODEL_ASSISTED_RESPONSE_KINDS.includes(responseKind)) {
     return fallback;
   }
 
   const promptPayload = {
     language,
+    responseKind,
     selectedCourse,
     userQuestion: input.message,
     studentProfile: input.studentProfile ?? {},
@@ -120,7 +106,7 @@ export async function createChatResponse(input: ChatRequest) {
       kind: document.kind,
       issuedOn: document.issuedOn,
       summary: document.summary,
-      snippet: document.snippet,
+      excerpt: getDocumentExcerpt(document),
       url: document.url,
     })),
     officialCutoffSummaries: retrieval.cutoffSummaries,
@@ -129,55 +115,73 @@ export async function createChatResponse(input: ChatRequest) {
     recommendationSummary: recommendations
       ? {
           summary: recommendations.summary,
-          safeOptions: recommendations.safeOptions.map((option) => option.combinedLabel),
-          competitiveOptions: recommendations.competitiveOptions.map(
-            (option) => option.combinedLabel,
-          ),
-          ambitiousOptions: recommendations.ambitiousOptions.map(
-            (option) => option.combinedLabel,
-          ),
+          warnings: recommendations.warnings,
+          safeOptions: recommendations.safeOptions.map((option) => ({
+            label: option.combinedLabel,
+            detail: option.rationale,
+            bucket: option.bucket,
+          })),
+          competitiveOptions: recommendations.competitiveOptions.map((option) => ({
+            label: option.combinedLabel,
+            detail: option.rationale,
+            bucket: option.bucket,
+          })),
+          ambitiousOptions: recommendations.ambitiousOptions.map((option) => ({
+            label: option.combinedLabel,
+            detail: option.rationale,
+            bucket: option.bucket,
+          })),
+          nextSteps: recommendations.nextSteps,
         }
       : null,
   };
 
-  const completion = await client.chat.completions.create({
-    model: DEFAULT_GROQ_MODEL,
-    temperature: 0.2,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are ACPC Admission Support. Use only the provided official context for factual claims. Keep the tone institutional, direct, and operational. Clearly separate verified facts from advisory guidance. If the context is insufficient, say so instead of guessing. Return valid JSON with keys: directAnswer, nextSteps, warnings, followUpPrompts.",
-      },
-      {
-        role: "user",
-        content: JSON.stringify(promptPayload),
-      },
-    ],
-  });
+  try {
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_GROQ_MODEL,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content: buildSystemPrompt(language, responseKind),
+        },
+        {
+          role: "user",
+          content: JSON.stringify(promptPayload),
+        },
+      ],
+    });
 
-  const content = completion.choices[0]?.message?.content;
+    const content = completion.choices[0]?.message?.content;
 
-  if (!content) {
-    return fallback;
+    if (!content) {
+      return fallback;
+    }
+
+    const parsed = extractJson<unknown>(content);
+    const normalized = normalizeModelResponse(parsed, fallback);
+
+    if (language === "gu") {
+      const gujaratiPayload = `${normalized.title} ${normalized.summary} ${JSON.stringify(normalized.sections)}`;
+
+      if (hasMojibake(gujaratiPayload) || !containsGujaratiCharacters(gujaratiPayload)) {
+        return fallback;
+      }
+    }
+
+    return normalized;
+  } catch {
+    return buildFallbackChatResponse({
+      language,
+      selectedCourse,
+      responseKind,
+      retrieval,
+      recommendations,
+      extraNotes: [
+        language === "gu"
+          ? "મોડલ સિન્થેસિસ નિષ્ફળ જતા જવાબ સુરક્ષિત સોર્સ આધારિત મોડમાં આપવામાં આવ્યો છે."
+          : "Model synthesis failed, so the response has been served in safe source-backed mode.",
+      ],
+    });
   }
-
-  const parsed = extractJson<
-    Pick<ChatResponse, "directAnswer" | "nextSteps" | "warnings" | "followUpPrompts">
-  >(content);
-
-  if (!parsed) {
-    return fallback;
-  }
-
-  return {
-    ...fallback,
-    mode: "grounded",
-    directAnswer: parsed.directAnswer || fallback.directAnswer,
-    nextSteps: parsed.nextSteps?.length ? parsed.nextSteps : fallback.nextSteps,
-    warnings: parsed.warnings?.length ? parsed.warnings : fallback.warnings,
-    followUpPrompts: parsed.followUpPrompts?.length
-      ? parsed.followUpPrompts
-      : fallback.followUpPrompts,
-  };
 }

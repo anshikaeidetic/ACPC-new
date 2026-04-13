@@ -165,18 +165,75 @@ export interface ChatRequest {
   studentProfile?: Partial<StudentProfile>;
 }
 
+export type ChatResponseKind =
+  | "general"
+  | "schedule"
+  | "eligibility"
+  | "documents"
+  | "process"
+  | "cutoff"
+  | "contact"
+  | "recommendation";
+
+export interface SourceReference {
+  title: string;
+  url: string;
+  kind: DocumentKind;
+  issuedOn?: string;
+}
+
+export interface TimelineSection {
+  type: "timeline";
+  title: string;
+  items: string[];
+}
+
+export interface ListSection {
+  type: "list";
+  title: string;
+  items: string[];
+}
+
+export interface ChecklistSection {
+  type: "checklist";
+  title: string;
+  items: string[];
+}
+
+export interface NoteSection {
+  type: "note";
+  title: string;
+  content: string;
+}
+
+export interface ChatOptionItem {
+  label: string;
+  detail?: string;
+  meta?: string[];
+  bucket?: RecommendationOption["bucket"];
+}
+
+export interface OptionsSection {
+  type: "options";
+  title: string;
+  items: ChatOptionItem[];
+}
+
+export type ChatSection =
+  | TimelineSection
+  | ListSection
+  | ChecklistSection
+  | NoteSection
+  | OptionsSection;
+
 export interface ChatResponse {
   language: SupportedLanguage;
-  mode: "grounded" | "fallback";
+  deliveryMode: "grounded" | "fallback";
   selectedCourse?: CourseCode;
-  directAnswer: string;
-  nextSteps: string[];
-  warnings: string[];
-  recommendedOptions: RecommendationOption[];
-  followUpPrompts: string[];
-  sources: Array<{
-    title: string;
-    url: string;
-    kind: DocumentKind;
-  }>;
+  responseKind: ChatResponseKind;
+  title: string;
+  summary: string;
+  sections: ChatSection[];
+  sources: SourceReference[];
+  suggestions: string[];
 }
